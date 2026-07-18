@@ -184,7 +184,13 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
   auto time_copy_end = std::chrono::high_resolution_clock::now();
 
 #ifdef USE_DET_CACHE_OMP
-  // Precompute determinant cache 
+  // Precompute determinant cache
+  // FIXME(correctness, separate from this transfer work): `static` means the
+  // cache is built once for the FIRST (adets,bdets) seen and is NOT rebuilt when
+  // the determinant set changes across SQD recovery iterations -> stale cache ->
+  // wrong Hij for later recoveries. Correct fix: give the cache a per-recovery
+  // lifetime (built/destroyed alongside MapHelpersToDevice in sbdiag.h), not a
+  // function-static. Left as-is here to keep this change transfer-only.
   auto time_cache_start = std::chrono::high_resolution_clock::now();
   static DeterminantCacheOMP<ElemT> det_cache(adets, bdets, bit_length, norbs, h_comm);
   auto time_cache_end = std::chrono::high_resolution_clock::now();
@@ -211,6 +217,19 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
 #endif
 
   double time_slid = 0.0;
+
+#ifdef USE_HIJ_OMP_OFFLOAD
+  // Keep the result vector Wb GPU-resident for the whole task loop: it carries
+  // the host-computed diagonal term in, the kernels accumulate the off-diagonal
+  // on device across all tasks, and it is copied back exactly once after the
+  // loop. This removes the per-task device->host->device bounce of Wb. Wb is the
+  // fixed-size output vector and is never resized here, so its data() pointer is
+  // stable across the loop. (T is handled per task below because Mpi2dSlide may
+  // reallocate it between tasks -- see the enter/exit around each kernel.)
+  ElemT *Wb_ptr_res = Wb.data();
+  const size_t Wb_size_res = Wb.size();
+#pragma omp target enter data map(to : Wb_ptr_res[0 : Wb_size_res])
+#endif
 
   for (size_t task = 0; task < helper.size(); task++) {
 
@@ -304,13 +323,21 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
 
       size_t det_cache_size = n_alpha * n_beta * det_size;
 
-      // Wb and T pointers
+      // Wb is already GPU-resident (mapped once before the loop); reuse its
+      // pointer in the kernels but do NOT re-map it here. T is (re-)derived and
+      // mapped per task because Mpi2dSlide may reallocate it between tasks; it
+      // is read-only in the kernels, so it is released with delete (no copy
+      // back) after the kernel below.
+      // This per-task upload of T (the ket, freshly slid on the host) is the
+      // only remaining host->device transfer in the loop -- integrals, the
+      // determinant cache, and the connectivity arrays are all resident. It
+      // cannot be avoided here without GPU-aware MPI for the Mpi2dSlide (kept
+      // disabled via MPICH_GPU_SUPPORT_ENABLED=0), so it is left as-is.
       ElemT *Wb_ptr = Wb.data();
       const ElemT *T_ptr = T.data();
-      size_t Wb_size = Wb.size();
       size_t T_size = T.size();
 
-#pragma omp target enter data map(to: T_ptr[0 : T_size], Wb_ptr[0 : Wb_size])
+#pragma omp target enter data map(to : T_ptr[0 : T_size])
 
       if (helper[task].taskType == 2) { // beta range are same
 #pragma omp target teams distribute parallel for collapse(2)                \
@@ -438,7 +465,9 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
         } // end for ia
       } // end taskType
 
-#pragma omp target exit data map(from: T_ptr[0: T_size], Wb_ptr[0 : Wb_size])
+      // Release this task's T mapping without copying it back (kernels only read
+      // T). Wb stays resident and is copied back once after the whole loop.
+#pragma omp target exit data map(delete : T_ptr[0 : T_size])
 
 
 #else
@@ -596,6 +625,13 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
     }
 
   } // end for(size_t task=0; task < helper.size(); task++)
+
+#ifdef USE_HIJ_OMP_OFFLOAD
+  // Copy the accumulated result back to the host once (Wb lived on the device
+  // across all tasks) and release the resident mapping. This must run before the
+  // host-side MPI allreduce below reads Wb.
+#pragma omp target exit data map(from : Wb_ptr_res[0 : Wb_size_res])
+#endif
   auto time_mult_end = std::chrono::high_resolution_clock::now();
 
   auto time_comm_start = std::chrono::high_resolution_clock::now();

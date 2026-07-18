@@ -7,6 +7,7 @@
 
 #ifdef USE_HIJ_OMP_OFFLOAD
 #include "../basic/hij_omp_offload.h"
+#include "mult_gpu_data.h"
 #endif
 
 namespace sbd {
@@ -262,6 +263,13 @@ void diag(const MPI_Comm &comm, const SBD &sbd_data,
                                        I2_ptr[0 : I2_size],                     \
                                        I2_Direct_ptr[0 : I2_Direct_size],       \
                                        I2_Exchange_ptr[0 : I2_Exchange_size])
+  // Make the iteration-invariant per-task connectivity arrays (the flattened
+  // single/double excitation index + offset arrays in `helper`) GPU-resident
+  // for the whole Davidson run, so the per-kernel map(to:) clauses in mult.h
+  // become no-copy present-lookups instead of re-uploading them every matvec.
+  // Paired 1:1 with UnmapHelpersFromDevice below. (Only the method-0 matrix-free
+  // path offloads; mapping for method 1 is harmless and keeps the pairing simple.)
+  sbd::MapHelpersToDevice(helper);
 #endif
 
   /**
@@ -424,6 +432,9 @@ void diag(const MPI_Comm &comm, const SBD &sbd_data,
   }
 
 #ifdef USE_HIJ_OMP_OFFLOAD
+  // Release the connectivity arrays made resident by MapHelpersToDevice above
+  // (must run before the integral delete; balanced with the enter-data map).
+  sbd::UnmapHelpersFromDevice(helper);
 // Clean up GPU memory for integrals
 #pragma omp target exit data map(delete : I1_ptr[0 : I1_size],                    \
                                           I2_ptr[0 : I2_size],                    \
