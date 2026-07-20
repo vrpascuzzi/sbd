@@ -226,9 +226,16 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
   // fixed-size output vector and is never resized here, so its data() pointer is
   // stable across the loop. (T is handled per task below because Mpi2dSlide may
   // reallocate it between tasks -- see the enter/exit around each kernel.)
-  ElemT *Wb_ptr_res = Wb.data();
-  const size_t Wb_size_res = Wb.size();
-#pragma omp target enter data map(to : Wb_ptr_res[0 : Wb_size_res])
+  //
+  // IMPORTANT: this `Wb_ptr` must be the SAME variable the kernels below
+  // dereference. OpenMP `map(to:)` attaches the specific pointer variable to the
+  // device copy; a different variable holding the same host address is NOT
+  // attached, and dereferencing it in a kernel uses the host address -> illegal
+  // device access. So we hoist `Wb_ptr` itself here and do NOT re-declare it per
+  // task.
+  ElemT *Wb_ptr = Wb.data();
+  const size_t Wb_size = Wb.size();
+#pragma omp target enter data map(to : Wb_ptr[0 : Wb_size])
 #endif
 
   for (size_t task = 0; task < helper.size(); task++) {
@@ -323,17 +330,16 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
 
       size_t det_cache_size = n_alpha * n_beta * det_size;
 
-      // Wb is already GPU-resident (mapped once before the loop); reuse its
-      // pointer in the kernels but do NOT re-map it here. T is (re-)derived and
-      // mapped per task because Mpi2dSlide may reallocate it between tasks; it
-      // is read-only in the kernels, so it is released with delete (no copy
-      // back) after the kernel below.
+      // Wb is already GPU-resident and attached via the hoisted `Wb_ptr` above
+      // (do NOT re-declare Wb_ptr here -- a new variable would not be attached to
+      // the device copy). T is (re-)derived and mapped per task because
+      // Mpi2dSlide may reallocate it between tasks; it is read-only in the
+      // kernels, so it is released with delete (no copy back) after the kernel.
       // This per-task upload of T (the ket, freshly slid on the host) is the
       // only remaining host->device transfer in the loop -- integrals, the
       // determinant cache, and the connectivity arrays are all resident. It
       // cannot be avoided here without GPU-aware MPI for the Mpi2dSlide (kept
       // disabled via MPICH_GPU_SUPPORT_ENABLED=0), so it is left as-is.
-      ElemT *Wb_ptr = Wb.data();
       const ElemT *T_ptr = T.data();
       size_t T_size = T.size();
 
@@ -630,7 +636,7 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
   // Copy the accumulated result back to the host once (Wb lived on the device
   // across all tasks) and release the resident mapping. This must run before the
   // host-side MPI allreduce below reads Wb.
-#pragma omp target exit data map(from : Wb_ptr_res[0 : Wb_size_res])
+#pragma omp target exit data map(from : Wb_ptr[0 : Wb_size])
 #endif
   auto time_mult_end = std::chrono::high_resolution_clock::now();
 
