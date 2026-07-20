@@ -280,6 +280,20 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
       size_t n_beta = bdets.size();
       const size_t *det_cache_ptr = det_cache.GetCachePointer();
 
+      // Capture the integral arrays into LOCAL pointers. The kernels below must
+      // NOT dereference the file-scope globals I1_ptr/I2_ptr/... directly: those
+      // globals are not `declare target`, so the device has no valid instance of
+      // them and reading through them faults (compute-sanitizer: invalid global
+      // read in OneExcite_device, I1 base ~0). Local pointers -- like
+      // det_cache_ptr above -- are firstprivate-captured into the kernel and
+      // translated against the present table (the integral arrays are made
+      // resident by `target enter data` in sbdiag.h), so passing these locals to
+      // ComputeHij resolves to the correct device addresses.
+      const double *I1_dev = I1_ptr;
+      const double *I2_dev = I2_ptr;
+      const double *I2_Direct_dev = I2_Direct_ptr;
+      const double *I2_Exchange_dev = I2_Exchange_ptr;
+
       // Get helper array pointers
       size_t nAlpha = helper[task].braAlphaEnd - helper[task].braAlphaStart;
       size_t *SinglesFromAlphaLen = helper[task].SinglesFromAlphaLen;
@@ -369,7 +383,7 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
               const size_t *DetI = &det_cache_ptr[bra_offset];
               const size_t *DetJ = &det_cache_ptr[ket_offset];
 
-              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_ptr, I2_ptr, I2_Direct_ptr, I2_Exchange_ptr);
+              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_dev, I2_dev, I2_Direct_dev, I2_Exchange_dev);
 
               Wb_ptr[braIdx] += hij * T_ptr[ketIdx];
             }
@@ -384,7 +398,7 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
               const size_t *DetI = &det_cache_ptr[bra_offset];
               const size_t *DetJ = &det_cache_ptr[ket_offset];
 
-              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_ptr, I2_ptr, I2_Direct_ptr, I2_Exchange_ptr);
+              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_dev, I2_dev, I2_Direct_dev, I2_Exchange_dev);
 
               Wb_ptr[braIdx] += hij * T_ptr[ketIdx];
             }
@@ -414,7 +428,7 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
               const size_t *DetI = &det_cache_ptr[bra_offset];
               const size_t *DetJ = &det_cache_ptr[ket_offset];
 
-              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_ptr, I2_ptr, I2_Direct_ptr, I2_Exchange_ptr);
+              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_dev, I2_dev, I2_Direct_dev, I2_Exchange_dev);
 
               Wb_ptr[braIdx] += hij * T_ptr[ketIdx];
             }
@@ -429,7 +443,7 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
               const size_t *DetI = &det_cache_ptr[bra_offset];
               const size_t *DetJ = &det_cache_ptr[ket_offset];
 
-              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_ptr, I2_ptr, I2_Direct_ptr, I2_Exchange_ptr);
+              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_dev, I2_dev, I2_Direct_dev, I2_Exchange_dev);
 
               Wb_ptr[braIdx] += hij * T_ptr[ketIdx];
             }
@@ -462,7 +476,7 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
                 const size_t *DetI = &det_cache_ptr[bra_offset];
                 const size_t *DetJ = &det_cache_ptr[ket_offset];
 
-                ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_ptr, I2_ptr, I2_Direct_ptr, I2_Exchange_ptr);
+                ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_dev, I2_dev, I2_Direct_dev, I2_Exchange_dev);
 
                 Wb_ptr[braIdx] += hij * T_ptr[ketIdx];
               }
