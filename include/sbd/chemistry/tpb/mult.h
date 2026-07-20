@@ -280,19 +280,11 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
       size_t n_beta = bdets.size();
       const size_t *det_cache_ptr = det_cache.GetCachePointer();
 
-      // Capture the integral arrays into LOCAL pointers. The kernels below must
-      // NOT dereference the file-scope globals I1_ptr/I2_ptr/... directly: those
-      // globals are not `declare target`, so the device has no valid instance of
-      // them and reading through them faults (compute-sanitizer: invalid global
-      // read in OneExcite_device, I1 base ~0). Local pointers -- like
-      // det_cache_ptr above -- are firstprivate-captured into the kernel and
-      // translated against the present table (the integral arrays are made
-      // resident by `target enter data` in sbdiag.h), so passing these locals to
-      // ComputeHij resolves to the correct device addresses.
-      const double *I1_dev = I1_ptr;
-      const double *I2_dev = I2_ptr;
-      const double *I2_Direct_dev = I2_Direct_ptr;
-      const double *I2_Exchange_dev = I2_Exchange_ptr;
+      // The integral arrays are read via the `declare target` globals I1_ptr/...
+      // directly inside ComputeHij (they are attached device pointers, mapped by
+      // the target enter data in sbdiag.h) -- no local copy is taken, because a
+      // host-side local copy of the global is not a valid device address when
+      // passed into the device-side ComputeHij.
 
       // Get helper array pointers
       size_t nAlpha = helper[task].braAlphaEnd - helper[task].braAlphaStart;
@@ -365,8 +357,11 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
              DoublesFromAlphaLen[0 : nAlpha],                               \
              SinglesFromAlphaOffset[0 : nAlpha + 1],                        \
              DoublesFromAlphaOffset[0 : nAlpha + 1],                        \
-             SinglesFromAlpha_ptr[0 : singles_alpha_total],                       \
-             DoublesFromAlpha_ptr[0 : doubles_alpha_total])  thread_limit(1024)
+             SinglesFromAlpha_ptr[0 : singles_alpha_total],                 \
+             DoublesFromAlpha_ptr[0 : doubles_alpha_total],                 \
+             I1_ptr[0 : I1_size], I2_ptr[0 : I2_size],                      \
+             I2_Direct_ptr[0 : I2_Direct_size],                            \
+             I2_Exchange_ptr[0 : I2_Exchange_size])  thread_limit(1024)
         for (size_t ia = braAlphaStart; ia < braAlphaEnd; ia++) {
           for (size_t ib = ibBeg; ib < ibEnd; ib++) {
             size_t braIdx = (ia - braAlphaStart) * braBetaSize + (ib - braBetaStart);
@@ -383,7 +378,7 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
               const size_t *DetI = &det_cache_ptr[bra_offset];
               const size_t *DetJ = &det_cache_ptr[ket_offset];
 
-              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_dev, I2_dev, I2_Direct_dev, I2_Exchange_dev);
+              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_ptr, I2_ptr, I2_Direct_ptr, I2_Exchange_ptr);
 
               Wb_ptr[braIdx] += hij * T_ptr[ketIdx];
             }
@@ -398,7 +393,7 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
               const size_t *DetI = &det_cache_ptr[bra_offset];
               const size_t *DetJ = &det_cache_ptr[ket_offset];
 
-              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_dev, I2_dev, I2_Direct_dev, I2_Exchange_dev);
+              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_ptr, I2_ptr, I2_Direct_ptr, I2_Exchange_ptr);
 
               Wb_ptr[braIdx] += hij * T_ptr[ketIdx];
             }
@@ -410,8 +405,11 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
              DoublesFromBetaLen[0 : nBeta],                                 \
              SinglesFromBetaOffset[0 : nBeta + 1],                          \
              DoublesFromBetaOffset[0 : nBeta + 1],                          \
-             SinglesFromBeta_ptr[0 : singles_beta_total],                        \
-             DoublesFromBeta_ptr[0 : doubles_beta_total])  thread_limit(1024)
+             SinglesFromBeta_ptr[0 : singles_beta_total],                   \
+             DoublesFromBeta_ptr[0 : doubles_beta_total],                   \
+             I1_ptr[0 : I1_size], I2_ptr[0 : I2_size],                      \
+             I2_Direct_ptr[0 : I2_Direct_size],                            \
+             I2_Exchange_ptr[0 : I2_Exchange_size])  thread_limit(1024)
         for (size_t ia = braAlphaStart; ia < braAlphaEnd; ia++) {
           for (size_t ib = ibBeg; ib < ibEnd; ib++) {
             size_t braIdx = (ia - braAlphaStart) * braBetaSize + (ib - braBetaStart);
@@ -428,7 +426,7 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
               const size_t *DetI = &det_cache_ptr[bra_offset];
               const size_t *DetJ = &det_cache_ptr[ket_offset];
 
-              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_dev, I2_dev, I2_Direct_dev, I2_Exchange_dev);
+              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_ptr, I2_ptr, I2_Direct_ptr, I2_Exchange_ptr);
 
               Wb_ptr[braIdx] += hij * T_ptr[ketIdx];
             }
@@ -443,7 +441,7 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
               const size_t *DetI = &det_cache_ptr[bra_offset];
               const size_t *DetJ = &det_cache_ptr[ket_offset];
 
-              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_dev, I2_dev, I2_Direct_dev, I2_Exchange_dev);
+              ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_ptr, I2_ptr, I2_Direct_ptr, I2_Exchange_ptr);
 
               Wb_ptr[braIdx] += hij * T_ptr[ketIdx];
             }
@@ -456,7 +454,10 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
              SinglesFromAlphaOffset[0 : nAlpha + 1],                           \
              SinglesFromBetaOffset[0 : nBeta + 1],                             \
              SinglesFromAlpha_ptr[0 : singles_alpha_total],                    \
-             SinglesFromBeta_ptr[0 : singles_beta_total])  thread_limit(1024)
+             SinglesFromBeta_ptr[0 : singles_beta_total],                     \
+             I1_ptr[0 : I1_size], I2_ptr[0 : I2_size],                        \
+             I2_Direct_ptr[0 : I2_Direct_size],                              \
+             I2_Exchange_ptr[0 : I2_Exchange_size])  thread_limit(1024)
         for (size_t ia = braAlphaStart; ia < braAlphaEnd; ia++) {
           for (size_t ib = ibBeg; ib < ibEnd; ib++) {
             size_t braIdx = (ia - braAlphaStart) * braBetaSize + (ib - braBetaStart);
@@ -476,7 +477,7 @@ void mult(const std::vector<ElemT> &hii, const std::vector<ElemT> &Wk,
                 const size_t *DetI = &det_cache_ptr[bra_offset];
                 const size_t *DetJ = &det_cache_ptr[ket_offset];
 
-                ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_dev, I2_dev, I2_Direct_dev, I2_Exchange_dev);
+                ElemT hij = ComputeHij(DetI, DetJ, bit_length, norbs, I0, I1_ptr, I2_ptr, I2_Direct_ptr, I2_Exchange_ptr);
 
                 Wb_ptr[braIdx] += hij * T_ptr[ketIdx];
               }

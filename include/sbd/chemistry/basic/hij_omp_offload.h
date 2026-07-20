@@ -11,7 +11,13 @@
 
 #include <limits> // For std::numeric_limits (bisection test)
 
-  // one-electron and two-electron integrals
+  // one-electron and two-electron integrals. Plain file-scope globals (NOT
+  // declare target): they are made device-resident and attached by listing them
+  // in the offload kernels' own map(to:) clauses in mult.h -- the exact pattern
+  // the connectivity arrays use, which is the only one that reliably uploads and
+  // attaches here. (declare target only synced the 8-byte pointer, and a
+  // standalone `target enter data` uploaded nothing -- both left the device
+  // pointer null, so OneExcite_device faulted reading I1.)
   size_t I1_size, I2_size, I2_Direct_size, I2_Exchange_size;
   double *I1_ptr;
   double *I2_ptr;

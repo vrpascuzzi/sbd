@@ -254,15 +254,16 @@ void diag(const MPI_Comm &comm, const SBD &sbd_data,
     }
   }
 
-  // Transfer to GPU and keep resident
+  // Publish the flattened integral arrays via the file-scope pointers. They are
+  // NOT mapped here: NOTIFY showed a standalone `target enter data` on these
+  // uploads nothing in this build. Instead each offload kernel in mult.h lists
+  // I1_ptr/... in its own map(to:) clause (first-touch upload + attach), the
+  // same mechanism the connectivity arrays use. I1_flat/... stay alive for the
+  // whole diagonalization (this scope), so the kernel maps see valid host data.
   I1_ptr = I1_flat.data();
   I2_ptr = I2_flat.data();
   I2_Direct_ptr = I2_Direct_flat.data();
   I2_Exchange_ptr = I2_Exchange_flat.data();
-#pragma omp target enter data map(to : I1_ptr[0 : I1_size],                    \
-                                       I2_ptr[0 : I2_size],                     \
-                                       I2_Direct_ptr[0 : I2_Direct_size],       \
-                                       I2_Exchange_ptr[0 : I2_Exchange_size])
   // Make the iteration-invariant per-task connectivity arrays (the flattened
   // single/double excitation index + offset arrays in `helper`) GPU-resident
   // for the whole Davidson run, so the per-kernel map(to:) clauses in mult.h
@@ -432,14 +433,10 @@ void diag(const MPI_Comm &comm, const SBD &sbd_data,
   }
 
 #ifdef USE_HIJ_OMP_OFFLOAD
-  // Release the connectivity arrays made resident by MapHelpersToDevice above
-  // (must run before the integral delete; balanced with the enter-data map).
+  // Release the connectivity arrays made resident by MapHelpersToDevice above.
+  // (No integral exit-data: the integrals are mapped per-kernel by mult.h's
+  // map(to:) clauses, so their device copies are released at each kernel's end.)
   sbd::UnmapHelpersFromDevice(helper);
-// Clean up GPU memory for integrals
-#pragma omp target exit data map(delete : I1_ptr[0 : I1_size],                    \
-                                          I2_ptr[0 : I2_size],                    \
-                                          I2_Direct_ptr[0 : I2_Direct_size],      \
-                                          I2_Exchange_ptr[0 : I2_Exchange_size])
 #endif
 
   /**
